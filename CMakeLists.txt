@@ -3,4 +3,4 @@ project(Flip7)
 
 set(CMAKE_CXX_STANDARD 17)
 
-add_executable(Flip7 main.cpp)
+add_executable(Flip7 simple_main.cpp)

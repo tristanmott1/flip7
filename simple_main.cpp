@@ -10,33 +10,28 @@
 #define MAX_ROUNDS 10
 #define TARGET_SCORE 200
 #define MAX_CARD 12
-#define N_SECOND_CHANCE 3
 #define DEBUG false
 
 uint64_t TOTAL_STATES;
 uint64_t SOLVED_STATES;
 int LAST_PCT;
 int TOTAL_CARDS;
-float SECOND_CHANCE_PROB;
 float *EXPECTED_ROUNDS_ARRAY = nullptr;
 
-uint64_t features_to_index(int round, int score, bool second_chance, std::array<int, (NUM_FLIPS - 1)> cards) {
+uint64_t features_to_index(int round, int score, std::array<int, (NUM_FLIPS - 1)> cards) {
     uint64_t index = round;
     index = index * TARGET_SCORE + score;
-    index = index * 2 + second_chance;
     for (int i = 0; i < NUM_FLIPS - 1; i++) {
         index = index * MAX_CARD + (cards[i] - 1);
     }
     return index;
 }
 
-void index_to_features(uint64_t index, int &round, int &score, bool &second_chance, std::array<int, (NUM_FLIPS - 1)> &cards) {
+void index_to_features(uint64_t index, int &round, int &score, std::array<int, (NUM_FLIPS - 1)> &cards) {
     for (int i = NUM_FLIPS - 2; i >= 0; i--) {
         cards[i] = (index % MAX_CARD) + 1;
         index /= MAX_CARD;
     }
-    second_chance = (index % 2);
-    index /= 2;
     score = (index % TARGET_SCORE);
     index /= TARGET_SCORE;
     round = index;
@@ -44,7 +39,7 @@ void index_to_features(uint64_t index, int &round, int &score, bool &second_chan
 
 
 // Returns the expected rounds for a given state
-float calculate_expected_rounds(uint64_t index, int round, int score, bool second_chance,
+float calculate_expected_rounds(uint64_t index, int round, int score,
                                 std::array<int, (NUM_FLIPS - 1)> cards, int drawn_cards,
                                 float &fold_expected_rounds, float &draw_expected_rounds) {
     // std::cout << index << std::endl;
@@ -53,17 +48,15 @@ float calculate_expected_rounds(uint64_t index, int round, int score, bool secon
 
     // Check that the index and features match
     if (DEBUG) {
-        uint64_t check_index = features_to_index(round, score, second_chance, cards);
+        uint64_t check_index = features_to_index(round, score, cards);
         int check_round, check_score;
-        bool check_second_chance;
         std::array<int, (NUM_FLIPS - 1)> check_cards;
-        index_to_features(index, check_round, check_score, check_second_chance, check_cards);
-        if (index >= TOTAL_STATES || check_index != index || check_round != round || check_score != score || check_second_chance != second_chance || check_cards != cards) {
+        index_to_features(index, check_round, check_score, check_cards);
+        if (index >= TOTAL_STATES || check_index != index || check_round != round || check_score != score || check_cards != cards) {
             std::ostringstream ss;
             ss << "Index: " << index << " vs " << check_index << std::endl
             << "Round: " << round << " vs " << check_round << std::endl
             << "Score: " << score << " vs " << check_score << std::endl
-            << "Second chance: " << second_chance << " vs " << check_second_chance << std::endl
             << "Cards: ";
             for (int i = 0; i < NUM_FLIPS - 1; i++) {
                 if (i == 0) {
@@ -118,11 +111,11 @@ float calculate_expected_rounds(uint64_t index, int round, int score, bool secon
             for (int i = 0; i < (NUM_FLIPS - 1); i++) {
                 next_cards[i] = 1;
             }
-            uint64_t next_index = features_to_index(next_round, next_score, false, next_cards);
+            uint64_t next_index = features_to_index(next_round, next_score, next_cards);
             // Find expected rounds
             float next_expected_rounds;
             if (EXPECTED_ROUNDS_ARRAY[next_index] < 0.0f) {
-                next_expected_rounds = calculate_expected_rounds(next_index, next_round, next_score, false, next_cards, 0, dummy_fold, dummy_draw);
+                next_expected_rounds = calculate_expected_rounds(next_index, next_round, next_score, next_cards, 0, dummy_fold, dummy_draw);
             }
             else {
                 next_expected_rounds = EXPECTED_ROUNDS_ARRAY[next_index];
@@ -143,46 +136,33 @@ float calculate_expected_rounds(uint64_t index, int round, int score, bool secon
                 already_present++;
             }
         }
-        float draw_probability;
-        if (second_chance) {
-            draw_probability = static_cast<float>((draw == 2 ? 3 : draw) - already_present) / static_cast<float>(TOTAL_CARDS - drawn_cards - N_SECOND_CHANCE);
-        }
-        else {
-            draw_probability = static_cast<float>((draw == 2 ? 3 : draw) - already_present) / static_cast<float>(TOTAL_CARDS - drawn_cards);
-        }
+        float draw_probability = static_cast<float>((draw == 2 ? 3 : draw) - already_present) / static_cast<float>(TOTAL_CARDS - drawn_cards);
         // Check if a bust
         if (already_present && (draw > 2)) {
-            // Check if second chance is available
-            if (second_chance) {
-                // Add to expected rounds
-                draw_expected_rounds += draw_probability * fold_expected_rounds;
+            // Check if this is the last round
+            if (round == MAX_ROUNDS - 1) {
+                draw_expected_rounds += draw_probability * static_cast<float>(MAX_ROUNDS);
             }
+            // Otherwise, advance to the next round
             else {
-                // Check if this is the last round
-                if (round == MAX_ROUNDS - 1) {
-                    draw_expected_rounds += draw_probability * static_cast<float>(MAX_ROUNDS);
+                // Calculate next round
+                int next_round = round + 1;
+                // Get next index
+                std::array<int, (NUM_FLIPS - 1)> next_cards;
+                for (int i = 0; i < (NUM_FLIPS - 1); i++) {
+                    next_cards[i] = 1;
                 }
-                // Otherwise, advance to the next round
+                uint64_t next_index = features_to_index(next_round, score, next_cards);
+                // Find expected rounds
+                float next_expected_rounds;
+                if (EXPECTED_ROUNDS_ARRAY[next_index] < 0.0f) {
+                    next_expected_rounds = calculate_expected_rounds(next_index, next_round, score, next_cards, 0, dummy_fold, dummy_draw);
+                }
                 else {
-                    // Calculate next round
-                    int next_round = round + 1;
-                    // Get next index
-                    std::array<int, (NUM_FLIPS - 1)> next_cards;
-                    for (int i = 0; i < (NUM_FLIPS - 1); i++) {
-                        next_cards[i] = 1;
-                    }
-                    uint64_t next_index = features_to_index(next_round, score, false, next_cards);
-                    // Find expected rounds
-                    float next_expected_rounds;
-                    if (EXPECTED_ROUNDS_ARRAY[next_index] < 0.0f) {
-                        next_expected_rounds = calculate_expected_rounds(next_index, next_round, score, false, next_cards, 0, dummy_fold, dummy_draw);
-                    }
-                    else {
-                        next_expected_rounds = EXPECTED_ROUNDS_ARRAY[next_index];
-                    }
-                    // Add to expected rounds
-                    draw_expected_rounds += draw_probability * next_expected_rounds;
+                    next_expected_rounds = EXPECTED_ROUNDS_ARRAY[next_index];
                 }
+                // Add to expected rounds
+                draw_expected_rounds += draw_probability * next_expected_rounds;
             }
         }
         // Otherwise, it is a safe draw
@@ -212,11 +192,11 @@ float calculate_expected_rounds(uint64_t index, int round, int score, bool secon
                     for (int i = 0; i < (NUM_FLIPS - 1); i++) {
                         next_cards[i] = 1;
                     }
-                    uint64_t next_index = features_to_index(next_round, next_score, false, next_cards);
+                    uint64_t next_index = features_to_index(next_round, next_score, next_cards);
                     // Find expected rounds
                     float next_expected_rounds;
                     if (EXPECTED_ROUNDS_ARRAY[next_index] < 0.0f) {
-                        next_expected_rounds = calculate_expected_rounds(next_index, next_round, next_score, false, next_cards, 0, dummy_fold, dummy_draw);
+                        next_expected_rounds = calculate_expected_rounds(next_index, next_round, next_score, next_cards, 0, dummy_fold, dummy_draw);
                     }
                     else {
                         next_expected_rounds = EXPECTED_ROUNDS_ARRAY[next_index];
@@ -231,11 +211,11 @@ float calculate_expected_rounds(uint64_t index, int round, int score, bool secon
                 std::array<int, (NUM_FLIPS - 1)> next_cards = cards;
                 next_cards[drawn_cards] = draw;
                 // Calculate next index
-                uint64_t next_index = features_to_index(round, score, second_chance, next_cards);
+                uint64_t next_index = features_to_index(round, score, next_cards);
                 // Find expected rounds
                 float next_expected_rounds;
                 if (EXPECTED_ROUNDS_ARRAY[next_index] < 0.0f) {
-                    next_expected_rounds = calculate_expected_rounds(next_index, round, score, second_chance, next_cards, drawn_cards + 1, dummy_fold, dummy_draw);
+                    next_expected_rounds = calculate_expected_rounds(next_index, round, score, next_cards, drawn_cards + 1, dummy_fold, dummy_draw);
                 }
                 else {
                     next_expected_rounds = EXPECTED_ROUNDS_ARRAY[next_index];
@@ -244,22 +224,6 @@ float calculate_expected_rounds(uint64_t index, int round, int score, bool secon
                 draw_expected_rounds += draw_probability * next_expected_rounds;
             }
         }
-    }
-    // Consider possibility of drawing a second chance card
-    if (!second_chance) {
-        float sc_probability = static_cast<float>(N_SECOND_CHANCE) / static_cast<float>(TOTAL_CARDS - drawn_cards);
-        // Continue drawing with second chance available
-        uint64_t next_index = features_to_index(round, score, true, cards);
-        // Find expected rounds
-        float next_expected_rounds;
-        if (EXPECTED_ROUNDS_ARRAY[next_index] < 0.0f) {
-            next_expected_rounds = calculate_expected_rounds(next_index, round, score, true, cards, drawn_cards, dummy_fold, dummy_draw);
-        }
-        else {
-            next_expected_rounds = EXPECTED_ROUNDS_ARRAY[next_index];
-        }
-        // Add to expected rounds
-        draw_expected_rounds += sc_probability * next_expected_rounds;
     }
 
     // Choose whichever option has fewer rounds
@@ -279,7 +243,7 @@ float calculate_expected_rounds(uint64_t index, int round, int score, bool secon
 int main()
 {
     // Calculate total number of states and cards
-    TOTAL_STATES = MAX_ROUNDS * TARGET_SCORE * 2;
+    TOTAL_STATES = MAX_ROUNDS * TARGET_SCORE;
     for (int i = 0; i < NUM_FLIPS - 1; i++) {
         TOTAL_STATES *= MAX_CARD;
     }
@@ -289,8 +253,6 @@ int main()
     for (int card = 2; card <= MAX_CARD; card++) {
         TOTAL_CARDS += (card == 2 ? 3 : card);
     }
-    TOTAL_CARDS += N_SECOND_CHANCE;
-    SECOND_CHANCE_PROB = static_cast<float>(N_SECOND_CHANCE) / static_cast<float>(TOTAL_CARDS);
     std::cout << "Total states: " << TOTAL_STATES << std::endl;
 
     // for (uint64_t i = 0; i < TOTAL_STATES; i++) {
@@ -313,18 +275,17 @@ int main()
     // Calculate expected rounds for the start state
     int start_round = 0;
     int start_score = 0;
-    bool start_second_chance = false;
     std::array<int, (NUM_FLIPS - 1)> start_cards;
     for (int i = 0; i < (NUM_FLIPS - 1); i++) {
         start_cards[i] = 1;
     }
-    uint64_t start_index = features_to_index(start_round, start_score, start_second_chance, start_cards);
+    uint64_t start_index = features_to_index(start_round, start_score, start_cards);
     float expected_rounds, draw_expected_rounds, fold_expected_rounds;
     try {
-        expected_rounds = calculate_expected_rounds(start_index, start_round, start_score, start_second_chance, start_cards, 0, fold_expected_rounds, draw_expected_rounds);
+        expected_rounds = calculate_expected_rounds(start_index, start_round, start_score, start_cards, 0, fold_expected_rounds, draw_expected_rounds);
         for (int alt_start_score = 1; alt_start_score < TARGET_SCORE; alt_start_score++) {
-            uint64_t alt_start_index = features_to_index(start_round, alt_start_score, start_second_chance, start_cards);
-            float alt_expected_rounds = calculate_expected_rounds(alt_start_index, start_round, alt_start_score, start_second_chance, start_cards, 0, fold_expected_rounds, draw_expected_rounds);
+            uint64_t alt_start_index = features_to_index(start_round, alt_start_score, start_cards);
+            float alt_expected_rounds = calculate_expected_rounds(alt_start_index, start_round, alt_start_score, start_cards, 0, fold_expected_rounds, draw_expected_rounds);
         }
     }
     catch (const std::runtime_error &e) {
@@ -345,20 +306,12 @@ int main()
 
         std::istringstream iss(line);
         int query_score;
-        bool query_second_chance;
         std::vector<int> cards_input;
 
         // Parse score
         if (!(iss >> query_score)) {
             continue;
         }
-
-        // Parse second chance
-        int second_chance_int;
-        if (!(iss >> second_chance_int)) {
-            continue;
-        }
-        query_second_chance = (second_chance_int != 0);
 
         // Parse cards
         int card;
@@ -399,9 +352,9 @@ int main()
 
         // Calculate index and get expected rounds
         int query_round = 0;
-        uint64_t query_index = features_to_index(query_round, query_score, query_second_chance, query_cards);
+        uint64_t query_index = features_to_index(query_round, query_score, query_cards);
         float query_fold_exp, query_draw_exp;
-        calculate_expected_rounds(query_index, query_round, query_score, query_second_chance, query_cards, cards_input.size(), query_fold_exp, query_draw_exp);
+        calculate_expected_rounds(query_index, query_round, query_score, query_cards, cards_input.size(), query_fold_exp, query_draw_exp);
 
         std::cout << "Fold expected rounds: " << query_fold_exp << std::endl;
         std::cout << "Draw expected rounds: " << query_draw_exp << std::endl;
